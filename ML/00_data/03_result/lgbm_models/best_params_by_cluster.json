@@ -1,0 +1,62 @@
+{
+  "0": {
+    "num_leaves": 69,
+    "learning_rate": 0.024550704048609633,
+    "feature_fraction": 0.46986189687308144,
+    "bagging_fraction": 0.9415942892292042,
+    "bagging_freq": 1,
+    "min_child_samples": 50,
+    "reg_alpha": 3.903719903952145e-06,
+    "reg_lambda": 0.0018287520715889645
+  },
+  "1": {
+    "num_leaves": 69,
+    "learning_rate": 0.024550704048609633,
+    "feature_fraction": 0.46986189687308144,
+    "bagging_fraction": 0.9415942892292042,
+    "bagging_freq": 1,
+    "min_child_samples": 31,
+    "reg_alpha": 3.903719903952145e-06,
+    "reg_lambda": 0.0018287520715889645
+  },
+  "2": {
+    "num_leaves": 63,
+    "learning_rate": 0.05388108577817234,
+    "feature_fraction": 0.42063311266913106,
+    "bagging_fraction": 0.9455922412472693,
+    "bagging_freq": 2,
+    "min_child_samples": 68,
+    "reg_alpha": 6.388511557344611e-06,
+    "reg_lambda": 0.0004793052550782129
+  },
+  "3": {
+    "num_leaves": 69,
+    "learning_rate": 0.024550704048609633,
+    "feature_fraction": 0.46986189687308144,
+    "bagging_fraction": 0.9415942892292042,
+    "bagging_freq": 1,
+    "min_child_samples": 31,
+    "reg_alpha": 3.903719903952145e-06,
+    "reg_lambda": 0.0018287520715889645
+  },
+  "4": {
+    "num_leaves": 54,
+    "learning_rate": 0.01947558230629543,
+    "feature_fraction": 0.4271363733463229,
+    "bagging_fraction": 0.5951981984579586,
+    "bagging_freq": 3,
+    "min_child_samples": 31,
+    "reg_alpha": 0.287499823474079,
+    "reg_lambda": 1.6247252885719427e-05
+  },
+  "5": {
+    "num_leaves": 230,
+    "learning_rate": 0.01121012420535719,
+    "feature_fraction": 0.4689702201036057,
+    "bagging_fraction": 0.9976099190484614,
+    "bagging_freq": 1,
+    "min_child_samples": 68,
+    "reg_alpha": 0.233339828475214,
+    "reg_lambda": 0.001660712592923483
+  }
+}

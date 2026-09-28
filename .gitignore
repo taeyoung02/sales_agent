@@ -1,0 +1,22 @@
+.DS_Store
+venv/
+.env.*
+chatbot/.env
+3d_simulator/carparts-seg/*
+3d_simulator/carparts-seg
+3d_simulator/carparts-seg2
+3d_simulator/carparts-seg2/*
+runs/*
+*.DS_Store
+*/.DS_Store
+
+# ML/**
+# chatbot/
+
+# Docker data directories
+web-client/data/
+web-client/nginx/logs/
+web-client/nginx/certs/
+
+# Source data directories
+web-client/source/*

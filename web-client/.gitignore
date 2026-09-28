@@ -1,0 +1,14 @@
+3d_simulator/*
+
+.cursorrules
+
+*.csv
+*.ply
+*.gltf
+*.ksplat
+*.bin
+*.pth
+
+web-client/source/*
+
+.env

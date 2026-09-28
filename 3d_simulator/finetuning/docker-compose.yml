@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  sam-clip-training:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sam-clip-finetuning:latest
+    container_name: sam-clip-train
+    
+    # NVIDIA GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
+      - DISPLAY=${DISPLAY}
+    
+    # 볼륨 마운트
+    volumes:
+      - ./:/workspace/finetuning
+      - ./outputs:/workspace/finetuning/outputs
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    
+    # GPU 장치 매핑
+    devices:
+      - /dev/nvidiactl
+      - /dev/nvidia-uvm
+      - /dev/nvidia0
+    
+    # 네트워크 설정
+    network_mode: host
+    
+    # IPC 설정 (멀티프로세싱 지원)
+    ipc: host
+    
+    # PyTorch shared memory 설정
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+    
+    # 보안 설정
+    security_opt:
+      - seccomp:unconfined
+    
+    # tty 설정
+    stdin_open: true
+    tty: true
+    
+    # 작업 디렉토리
+    working_dir: /workspace/finetuning
+    
+    # 기본 명령어
+    command: /bin/bash

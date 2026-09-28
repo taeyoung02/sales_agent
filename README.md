@@ -1,0 +1,2 @@
+# SNU_KDT_KOLON_CAPSTONE_PROJECT
+2025 서울대 코오롱 팀 프로젝트

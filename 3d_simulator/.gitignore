@@ -1,0 +1,127 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ===== Virtual Environments =====
+venv/
+ENV/
+env/
+.venv/
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== Jupyter Notebook =====
+.ipynb_checkpoints/
+
+# ===== Data & Checkpoints (대용량 파일) =====
+data/
+./data/
+checkpoints/
+videos/
+./videos/
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.pt
+*.npy
+
+# ===== Output & Results =====
+output/
+outputs/
+./finetuning/outputs/
+results/
+logs/
+*.log
+*.html
+*.txt
+
+# ===== 3DGS specific =====
+gaussian-splatting/output/
+LangSplat/output/
+*.ply
+*.splat
+
+# ===== COLMAP =====
+colmap_output/
+sparse/
+dense/
+database.db
+
+# ===== Language Features (generated) =====
+language_features/
+*_s.npy
+*_f.npy
+
+# ===== Finetuning Data =====
+**/finetuning/VehicleSeg10K/*
+
+# ===== Submodules (외부 라이브러리) =====
+**/CF3/submodules/*
+**/CF3-main/submodules/*
+**/gaussian-splatting/submodules/*
+**/SuGaR-main/gaussian_splatting/submodules/*
+**/mip-splatting/submodules/*
+**/LangSplat/submodules/*
+**/submodules/*
+
+# ===== Docker =====
+docker/models/
+docker/checkpoints/
+
+# ===== OS specific =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Temporary files =====
+*.tmp
+*.temp
+*.bak
+tmp/
+temp/
+
+# ===== Large media files =====
+*.mp4
+*.avi
+*.mov
+*.MOV
+*.mkv
+*.zip
+*.tar.gz
+*.tar
+*.rar
+*.7z
+
+# ===== Images (대용량 이미지 파일) =====
+*.png
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+*.PNG
+*.gif
+*.bmp

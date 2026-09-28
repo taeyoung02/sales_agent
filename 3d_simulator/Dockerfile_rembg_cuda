@@ -1,0 +1,106 @@
+#==============================================================================
+# Rembg Docker Image with NVIDIA CUDA 13.0 Support
+# This image provides GPU-accelerated background removal using rembg library
+# Base: NVIDIA PyTorch 25.09 (PyTorch 2.9, CUDA 13.0, Python 3.12)
+# Matches the main pipeline container for consistency
+#==============================================================================
+
+FROM nvcr.io/nvidia/pytorch:25.09-py3
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Seoul
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (additional packages for rembg)
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --fix-missing \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    wget \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Note: PyTorch 2.9 with CUDA 13.0 already installed in base image
+# Verify versions
+RUN python --version && \
+    python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.version.cuda}'); print(f'cuDNN: {torch.backends.cudnn.version()}')"
+
+# Install onnxruntime first (CPU version for ARM64 compatibility)
+# Note: onnxruntime-gpu is not available for ARM64 architecture
+# However, rembg can still use PyTorch GPU acceleration for preprocessing
+RUN pip install --no-cache-dir onnxruntime
+
+# Install rembg without [gpu] extra (we'll use PyTorch GPU instead)
+# This avoids the onnxruntime-gpu dependency conflict on ARM64
+RUN pip install --no-cache-dir \
+    "rembg>=2.0.50" \
+    pillow \
+    numpy \
+    tqdm \
+    opencv-python-headless
+
+# Verify CUDA availability (PyTorch CUDA support)
+RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda if torch.cuda.is_available() else \"N/A\"}')"
+
+# Copy the rembg mask generation script
+COPY generate_rembg_masks.py /app/
+
+# Create necessary directories
+RUN mkdir -p /app/inputs /app/outputs
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Create entrypoint script
+RUN echo '#!/bin/bash' > /app/entrypoint.sh && \
+    echo 'set -e' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo 'INPUT_DIR=${INPUT_DIR:-/app/inputs}' >> /app/entrypoint.sh && \
+    echo 'OUTPUT_DIR=${OUTPUT_DIR:-/app/outputs}' >> /app/entrypoint.sh && \
+    echo 'MODEL=${MODEL:-u2net}' >> /app/entrypoint.sh && \
+    echo 'OUTPUT_TYPE=${OUTPUT_TYPE:-mask}' >> /app/entrypoint.sh && \
+    echo 'ALPHA_MATTING=${ALPHA_MATTING:-false}' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo 'echo "==========================================="' >> /app/entrypoint.sh && \
+    echo 'echo "Rembg Mask Generation with CUDA"' >> /app/entrypoint.sh && \
+    echo 'echo "==========================================="' >> /app/entrypoint.sh && \
+    echo 'echo "Input directory: $INPUT_DIR"' >> /app/entrypoint.sh && \
+    echo 'echo "Output directory: $OUTPUT_DIR"' >> /app/entrypoint.sh && \
+    echo 'echo "Model: $MODEL"' >> /app/entrypoint.sh && \
+    echo 'echo "Output type: $OUTPUT_TYPE"' >> /app/entrypoint.sh && \
+    echo 'echo "Alpha matting: $ALPHA_MATTING"' >> /app/entrypoint.sh && \
+    echo 'echo "==========================================="' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo 'ALPHA_MATTING_FLAG=""' >> /app/entrypoint.sh && \
+    echo 'if [ "$ALPHA_MATTING" = "true" ]; then' >> /app/entrypoint.sh && \
+    echo '    ALPHA_MATTING_FLAG="--alpha_matting"' >> /app/entrypoint.sh && \
+    echo 'fi' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo 'python /app/generate_rembg_masks.py \' >> /app/entrypoint.sh && \
+    echo '    --images_dir "$INPUT_DIR" \' >> /app/entrypoint.sh && \
+    echo '    --output_dir "$OUTPUT_DIR" \' >> /app/entrypoint.sh && \
+    echo '    --model "$MODEL" \' >> /app/entrypoint.sh && \
+    echo '    --device cuda \' >> /app/entrypoint.sh && \
+    echo '    --output_type "$OUTPUT_TYPE" \' >> /app/entrypoint.sh && \
+    echo '    $ALPHA_MATTING_FLAG \' >> /app/entrypoint.sh && \
+    echo '    "$@"' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo 'echo ""' >> /app/entrypoint.sh && \
+    echo 'echo "==========================================="' >> /app/entrypoint.sh && \
+    echo 'echo "Mask Generation Complete!"' >> /app/entrypoint.sh && \
+    echo 'echo "Output saved to: $OUTPUT_DIR"' >> /app/entrypoint.sh && \
+    echo 'echo "==========================================="' >> /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
+
+# Default command
+ENTRYPOINT ["/app/entrypoint.sh"]

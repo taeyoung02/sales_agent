@@ -1,0 +1,325 @@
+# 프로덕션 환경용 Docker Compose 설정
+# Note: version 속성은 Docker Compose v2에서 더 이상 필요하지 않음
+#
+# 디렉토리 구조 (~/Desktop/work/3d-sales-agent 기준):
+#   ~/Desktop/work/3d-sales-agent/
+#   ├── app/                          # 애플리케이션 소스 코드
+#   │   ├── 3d_simulator/             # 3D 파이프라인 소스 코드
+#   │   └── web-client/               # 프로젝트 루트 (docker-compose 실행 위치)
+#   │       ├── backend/
+#   │       ├── frontend/
+#   │       ├── source/
+#   │       └── scripts/
+#   ├── data/                         # 영구 데이터
+#   │   ├── postgres/                 # PostgreSQL 데이터
+#   │   ├── qdrant/                   # Qdrant 벡터 데이터
+#   │   └── redis/                    # Redis 세션 데이터 (AOF persistence)
+#   │   # Note: Static files (3D models, PLY, etc.) are in app/web-client/source/
+#   ├── logs/                         # 로그 파일
+#   │   ├── app/                      # 애플리케이션 로그
+#   │   └── nginx/                    # Nginx 로그
+#   └── config/                       # 설정 파일
+#       └── nginx/                    # Nginx 설정 및 인증서
+#
+# 사용법:
+#   cd ~/Desktop/work/3d-sales-agent/app/web-client
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: kolon-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kolon_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-kolon_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ~/Desktop/work/3d-sales-agent/data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - app-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kolon_user}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:v1.16.0
+    container_name: kolon-qdrant
+    restart: unless-stopped
+    volumes:
+      - ~/Desktop/work/3d-sales-agent/data/qdrant:/qdrant/storage
+    ports:
+      - "6333:6333" # REST API
+      - "6334:6334" # gRPC (optional)
+    networks:
+      - app-network
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    # Healthcheck removed - Qdrant image doesn't include HTTP clients
+    # Qdrant starts quickly, so depends_on with service_started is sufficient
+
+    # Redis (Session Management)
+    # IMPORTANT: keyspace notifications MUST be enabled for session expiry detection
+  redis:
+    image: redis:7-alpine
+    container_name: kolon-redis
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server \
+            --notify-keyspace-events Ex \
+            --maxmemory 512mb \
+            --maxmemory-policy allkeys-lru \
+            --requirepass "$$REDIS_PASSWORD" \
+            --appendonly yes \
+            --appendfsync everysec
+        else
+          exec redis-server \
+            --notify-keyspace-events Ex \
+            --maxmemory 512mb \
+            --maxmemory-policy allkeys-lru \
+            --appendonly yes \
+            --appendfsync everysec
+        fi
+    # notify-keyspace-events Ex: Enable expired event notifications (required for session TTL)
+    # maxmemory 512mb: Production memory limit (increased from dev 256mb)
+    # maxmemory-policy allkeys-lru: Evict oldest keys when memory limit is reached
+    # requirepass: Automatically set if REDIS_PASSWORD environment variable is defined
+    # appendonly yes: Enable AOF persistence for data durability
+    # appendfsync everysec: Fsync every second (balance between performance and safety)
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ~/Desktop/work/3d-sales-agent/data/redis:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: >
+        sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+          redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping;
+        else
+          redis-cli ping;
+        fi'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # FastAPI Backend
+  backend:
+    user: "1000:1000"
+    build:
+      # Build context: 상대 경로 (docker-compose 실행 위치 기준)
+      # 프로덕션에서는 /srv/3d-sales-agent/app/web-client/backend가 되어야 함
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: kolon-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Timezone
+      TZ: Asia/Seoul
+      # Database
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-kolon_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-kolon_db}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kolon_user}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-kolon_db}
+
+      # Qdrant
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-kolon_used_cars}
+      QDRANT_URL: ${QDRANT_URL:-} # Optional: for Qdrant Cloud
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-} # Optional: for Qdrant Cloud
+
+      # Redis (Session Management)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      # REDIS_PASSWORD is loaded from ./backend/.env file via env_file
+
+      # OpenAI (loaded from .env file via env_file)
+      # OPENAI_API_KEY is loaded from ./backend/.env file
+      OPENAI_EMBED_MODEL: ${OPENAI_EMBED_MODEL:-text-embedding-3-small}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o}
+
+      # Application
+      USE_AUTOENCODER: ${USE_AUTOENCODER:-true}
+      CF3_PLY_PATH: ${CF3_PLY_PATH:-/backend/source/cf3_demo/cf3.ply}
+      AUTOENCODER_PATH: ${AUTOENCODER_PATH:-/backend/source/cf3_demo/autoencoder.pth}
+
+      # Logging
+      LOG_DIR: /backend/logs
+      SESSION_LOG_DIR: /backend/logs/session_logs # 세션 로그 저장 경로
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # R2 Storage (if used)
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-}
+      R2_ENDPOINT_URL: ${R2_ENDPOINT_URL:-}
+    volumes:
+      # Prompts files
+      - ./backend/prompts:/backend/prompts:rw
+      # Source files (PLY, models, etc.) - 모든 3D 모델과 정적 파일이 여기에 있음
+      - ~/Desktop/work/3d-sales-agent/app/web-client/source:/backend/source:ro
+      # 3D Simulator pipeline code - 파이프라인 스크립트 및 데이터
+      # web-client/3d_simulator로 이동됨
+      - ./3d_simulator:/app/3d_simulator:rw
+      # Docker socket - 파이프라인 스크립트가 docker compose를 실행할 수 있도록
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Application logs
+      - ~/Desktop/work/3d-sales-agent/logs/app:/backend/logs
+    working_dir: /backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health').read()" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: kolon-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Nginx configuration
+      - ~/Desktop/work/3d-sales-agent/config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ~/Desktop/work/3d-sales-agent/config/nginx/conf.d:/etc/nginx/conf.d:ro
+      # SSL certificates (for HTTPS)
+      - ~/Desktop/work/3d-sales-agent/config/nginx/certs:/etc/nginx/certs:ro
+      # Source files (3D models, PLY files, etc.) - Backend와 동일한 source 디렉토리 사용
+      - ~/Desktop/work/3d-sales-agent/app/web-client/source:/var/www/static/source:ro
+      # Frontend standalone 빌드는 Node.js 서버로 실행되므로 마운트 불필요
+      # - ~/Desktop/work/3d-sales-agent/app/web-client/frontend/.next/standalone:/usr/share/nginx/html:ro
+      # Logs
+      - ~/Desktop/work/3d-sales-agent/logs/nginx:/var/log/nginx
+    networks:
+      - app-network
+    depends_on:
+      - backend
+      - frontend
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  # Frontend (Standalone 빌드)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: kolon-frontend
+    restart: unless-stopped
+    environment:
+      # API는 nginx를 통해 접근
+      - NEXT_PUBLIC_API_URL=http://localhost/api
+      - NODE_ENV=production
+    ports:
+      - "3000:3000"
+    networks:
+      - app-network
+    depends_on:
+      - backend
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Standalone 빌드는 내부 포트로만 노출 (외부 접근은 nginx 통해)
+    # expose:
+    #   - "3000"
+
+    # Cloudflare Tunnel (Argo Tunnel)
+    # Cloudflare를 통해 외부에서 서버에 안전하게 접근
+    # IMPORTANT: cloudflared는 호스트 네트워크를 사용하여 localhost:80(Nginx)에 접근
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: kolon-cloudflared
+    restart: unless-stopped
+    # backend/.env 파일에서 CLOUDFLARE_TUNNEL_TOKEN 로드
+    env_file:
+      - ./backend/.env
+    # 터널 실행 (인증서 파일 또는 토큰 사용)
+    # 방법 1: 인증서 파일 사용
+    # command: tunnel --no-autoupdate run
+    # volumes:
+    #   - ~/.cloudflared:/etc/cloudflared:ro
+    # 방법 2: 토큰 사용 (더 간단, 권장)
+    # backend/.env 파일에 CLOUDFLARE_TUNNEL_TOKEN 설정 필요
+    # 토큰이 없으면 인증서 파일 방식으로 폴백 (config.yml 필요)
+    command: >
+      sh -c 'echo "=== Cloudflared Startup Debug ===" >&2; echo "CLOUDFLARE_TUNNEL_TOKEN length: $${#CLOUDFLARE_TUNNEL_TOKEN}" >&2; echo "Checking /etc/cloudflared/config.yml:" >&2; ls -la /etc/cloudflared/ 2>&1 || echo "Directory not found" >&2; if [ -f /etc/cloudflared/config.yml ]; then echo "Config file found, showing tunnel line:" >&2; grep "^tunnel:" /etc/cloudflared/config.yml >&2 || echo "No tunnel line found" >&2; fi; if [ -n "$$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+        echo "Using tunnel token (length: $${#CLOUDFLARE_TUNNEL_TOKEN})" >&2;
+        exec cloudflared tunnel --no-autoupdate run --token "$$CLOUDFLARE_TUNNEL_TOKEN";
+      elif [ -f /etc/cloudflared/config.yml ]; then
+        echo "Using config file: /etc/cloudflared/config.yml" >&2;
+        # config.yml에서 터널 ID 추출
+        TUNNEL_ID=$$(grep "^tunnel:" /etc/cloudflared/config.yml | head -1 | awk "{print $$2}" | tr -d "\"'" || echo "");
+        if [ -n "$$TUNNEL_ID" ]; then
+          echo "Extracted tunnel ID from config: $$TUNNEL_ID" >&2;
+          exec cloudflared tunnel --no-autoupdate run "$$TUNNEL_ID";
+        else
+          echo "No tunnel ID found in config.yml, trying default run" >&2;
+          exec cloudflared tunnel --no-autoupdate run;
+        fi;
+      else
+        echo "ERROR: Neither CLOUDFLARE_TUNNEL_TOKEN nor config.yml found!" >&2;
+        echo "CLOUDFLARE_TUNNEL_TOKEN: [$${CLOUDFLARE_TUNNEL_TOKEN:0:20}...] (first 20 chars)" >&2;
+        echo "Config file check: /etc/cloudflared/config.yml" >&2;
+        echo "Please set CLOUDFLARE_TUNNEL_TOKEN in backend/.env or create ~/.cloudflared/config.yml" >&2;
+        echo "Sleeping 10 seconds before exit to allow log inspection..." >&2;
+        sleep 10;
+        exit 1;
+      fi'
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    volumes:
+      # 토큰이 없을 때 인증서 파일 사용 (폴백)
+      - ~/.cloudflared:/etc/cloudflared:ro
+    # 호스트 네트워크 사용 (localhost:80에 접근하기 위해 필수)
+    network_mode: "host"
+    depends_on:
+      - nginx
+    healthcheck:
+      test: [ "CMD", "cloudflared", "tunnel", "info" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  app-network:
+    driver: bridge
+    name: kolon-app-network

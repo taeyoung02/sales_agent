@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Conda
+realesrgan/
+venv_realesrgan/
+
+# Results and temporary files
+results/
+tesla_motion_enhanced/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

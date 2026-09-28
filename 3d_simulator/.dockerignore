@@ -1,0 +1,76 @@
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Ignore virtual environments
+venv/
+env/
+.env
+
+# Ignore IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore large files (PLY, model weights, etc.)
+*.ply
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.npy
+*.npz
+*.bin
+
+# Ignore outputs and results
+**/output/
+**/outputs/
+**/runs/
+**/logs/
+**/tensorboard/
+**/ckpt/
+**/ckpts/
+**/checkpoints/
+**/point_cloud/
+
+# Ignore datasets and data
+data/
+checkpoints/
+**/datasets/
+**/cartoy/
+**/truck/
+**/doll/
+gaussian-splatting/cartoy/
+gaussian-splatting/output/
+LangSplat/output/
+LangSplat/datasets/
+LangSplat/ckpts/
+LangSplat/_-1/
+CF3/output/
+
+# EXCEPTION: Keep GroundingDINO source code (needed for import)
+!LangSplat/GroundingDINO/groundingdino/datasets/
+
+# Ignore temporary files
+*.tmp
+*.temp
+*.log
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore git
+.git/
+.gitignore
+.gitattributes
+
+# Ignore documentation images
+**/assets/
+
+# Keep scripts and essential configs
+!docker/
+!docker/**

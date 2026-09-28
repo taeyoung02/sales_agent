@@ -1,0 +1,190 @@
+#==============================================================================
+# 3D Reconstruction Pipeline Dockerfile (Main Container)
+# - COLMAP (Camera Pose Estimation)
+# - 3DGS (Gaussian Splatting)
+# - LangSplat (Language Feature Extraction)
+# - CF3 (Compact Feature Field)
+#
+# Note: This container uses Python 3.12 and PyTorch 2.9
+#       For image preprocessing, use separate Real-ESRGAN container
+#       For mask generation, use separate Rembg container
+#       (Python 3.10, PyTorch 1.13) defined in Real-ESRGAN-0.3.0/Dockerfile
+#==============================================================================
+
+# Base Image: NVIDIA PyTorch Container (includes PyTorch with CUDA support for both x86_64 and aarch64)
+# nvcr.io/nvidia/pytorch:25.09-py3 contains PyTorch 2.9, CUDA 13.0, Python 3.12 - Supports NVIDIA GB10 (sm_121)
+FROM nvcr.io/nvidia/pytorch:25.09-py3 AS base
+
+# Prevent interactive prompts during apt-get
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Seoul
+
+# Qt headless mode for COLMAP (no display required)
+ENV QT_QPA_PLATFORM=offscreen
+
+# ===== 1. Install System Packages (replaces Visual Studio 2019) =====
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --fix-missing \
+    git \
+    cmake \
+    build-essential \
+    ninja-build \
+    curl \
+    wget \
+    vim \
+    unzip \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libglew-dev \
+    libglfw3-dev \
+    libboost-all-dev \
+    libeigen3-dev \
+    libflann-dev \
+    libfreeimage-dev \
+    libmetis-dev \
+    libgoogle-glog-dev \
+    libgflags-dev \
+    libsqlite3-dev \
+    libcgal-dev \
+    qtbase5-dev \
+    libqt5opengl5-dev \
+    libceres-dev \
+    ffmpeg \
+    xvfb \
+    x11-utils \
+    mesa-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ===== 2. Install COLMAP from source =====
+WORKDIR /opt
+
+# Check if COLMAP with CUDA support is available, otherwise build from source
+# CUDA 13.0 only supports sm_89, sm_90, and sm_121 architectures
+RUN apt-get update && apt-get install -y --no-install-recommends colmap || \
+    (git clone https://github.com/colmap/colmap.git && \
+    cd colmap && \
+    git checkout 3.8 && \
+    mkdir build && cd build && \
+    cmake .. -GNinja \
+        -DCMAKE_CUDA_ARCHITECTURES="89;90;121" \
+        -DCMAKE_BUILD_TYPE=Release && \
+    ninja && \
+    ninja install && \
+    cd ../.. && rm -rf colmap) && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create wrapper script for GPU COLMAP with Xvfb
+RUN echo '#!/bin/bash\n\
+Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &\n\
+export DISPLAY=:99\n\
+sleep 2\n\
+exec "$@"' > /usr/local/bin/colmap-gpu && \
+    chmod +x /usr/local/bin/colmap-gpu
+    
+# ===== 3. Miniconda is NOT needed - NGC container already has Python/pip =====
+# The NGC PyTorch container comes with Python 3.10 and pip pre-installed
+
+# ===== 4. Set Working Directory =====
+WORKDIR /workspace
+
+# ===== 5. Set CUDA Environment Variables (MUST be set BEFORE building CUDA extensions) =====
+# NGC containers already have CUDA_HOME set, but we ensure consistency
+# CUDA 13.0 only supports sm_89, sm_90, and sm_121 (GB10)
+ENV CUDA_HOME=/usr/local/cuda
+ENV TORCH_CUDA_ARCH_LIST="8.9;9.0;12.1"
+ENV FORCE_CUDA=1
+
+# Fix HPC-X/UCX library conflict on aarch64 (undefined symbol errors)
+# Root cause: UCX libraries have circular dependencies that don't resolve correctly on ARM64
+# libucs.so.0 needs libucm.so.0, libucp.so.0 needs libuct.so.0, etc.
+# Solution: Preload all UCX libraries in the correct order
+ENV LD_PRELOAD=/opt/hpcx/ucx/lib/libucm.so.0:/opt/hpcx/ucx/lib/libuct.so.0:/opt/hpcx/ucx/lib/libucs.so.0:/opt/hpcx/ucx/lib/libucp.so.0
+ENV OMPI_MCA_coll_hcoll_enable=0
+ENV HCOLL_ENABLE_MCAST_ALL=0
+
+# ===== 6. Install Additional Python Dependencies =====
+# NGC container already has PyTorch with CUDA, just add missing packages
+# Create requirements in container for better layer caching
+RUN echo "scipy" > /tmp/requirements.txt && \
+    echo "scikit-image" >> /tmp/requirements.txt && \
+    echo "tqdm" >> /tmp/requirements.txt && \
+    echo "plyfile" >> /tmp/requirements.txt && \
+    echo "joblib" >> /tmp/requirements.txt && \
+    echo "opencv-python==4.8.0.74" >> /tmp/requirements.txt && \
+    echo "numpy<2.0" >> /tmp/requirements.txt && \
+    echo "open-clip-torch" >> /tmp/requirements.txt && \
+    echo "jaxtyping" >> /tmp/requirements.txt && \
+    echo "tensorboard" >> /tmp/requirements.txt && \
+    echo "matplotlib" >> /tmp/requirements.txt && \
+    echo "timm" >> /tmp/requirements.txt && \
+    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
+
+# ===== 7. Copy Source Code (Submodules first for better caching) =====
+# Copy submodules separately - these change less frequently
+COPY gaussian-splatting/submodules /workspace/gaussian-splatting/submodules
+COPY LangSplat/submodules /workspace/LangSplat/submodules
+COPY CF3/submodules /workspace/CF3/submodules
+
+# ===== 8. Build CUDA Submodules (Heavy compilation - cache this layer) =====
+# All submodules will use the same PyTorch from NGC container
+
+# Ensure GLM library exists for CUDA rasterization modules
+# Some submodules have empty third_party/glm directories (git submodule not initialized)
+RUN if [ ! -f /workspace/gaussian-splatting/submodules/diff-gaussian-rasterization/third_party/glm/glm/glm.hpp ]; then \
+        rm -rf /workspace/gaussian-splatting/submodules/diff-gaussian-rasterization/third_party/glm && \
+        git clone --depth 1 https://github.com/g-truc/glm.git /workspace/gaussian-splatting/submodules/diff-gaussian-rasterization/third_party/glm; \
+    fi && \
+    if [ ! -f /workspace/LangSplat/submodules/langsplat-rasterization/third_party/glm/glm/glm.hpp ]; then \
+        rm -rf /workspace/LangSplat/submodules/langsplat-rasterization/third_party/glm && \
+        git clone --depth 1 https://github.com/g-truc/glm.git /workspace/LangSplat/submodules/langsplat-rasterization/third_party/glm; \
+    fi && \
+    if [ ! -f /workspace/CF3/submodules/diff-gaussian-rasterization-feature/third_party/glm/glm/glm.hpp ]; then \
+        rm -rf /workspace/CF3/submodules/diff-gaussian-rasterization-feature/third_party/glm && \
+        git clone --depth 1 https://github.com/g-truc/glm.git /workspace/CF3/submodules/diff-gaussian-rasterization-feature/third_party/glm; \
+    fi && \
+    if [ ! -f /workspace/CF3/submodules/diff-gaussian-rasterization/third_party/glm/glm/glm.hpp ]; then \
+        rm -rf /workspace/CF3/submodules/diff-gaussian-rasterization/third_party/glm && \
+        git clone --depth 1 https://github.com/g-truc/glm.git /workspace/CF3/submodules/diff-gaussian-rasterization/third_party/glm; \
+    fi
+
+# Build 3DGS submodules
+RUN pip install /workspace/gaussian-splatting/submodules/diff-gaussian-rasterization --no-build-isolation && \
+    pip install /workspace/gaussian-splatting/submodules/simple-knn --no-build-isolation && \
+    pip install /workspace/gaussian-splatting/submodules/fused-ssim --no-build-isolation
+
+# Build LangSplat submodules
+RUN pip install /workspace/LangSplat/submodules/langsplat-rasterization --no-build-isolation && \
+    pip install /workspace/LangSplat/submodules/simple-knn --no-build-isolation && \
+    pip install /workspace/LangSplat/submodules/segment-anything-langsplat --no-build-isolation
+
+# Build CF3 submodules
+RUN pip install /workspace/CF3/submodules/diff-gaussian-rasterization-feature --no-build-isolation && \
+    pip install /workspace/CF3/submodules/diff-gaussian-rasterization --no-build-isolation && \
+    pip install /workspace/CF3/submodules/simple-knn --no-build-isolation
+
+# ===== 9. Copy Application Code (Frequently changed - do this last) =====
+COPY gaussian-splatting /workspace/gaussian-splatting
+COPY LangSplat /workspace/LangSplat
+COPY CF3 /workspace/CF3
+
+# ===== 10. Copy Mahalanobis Pruning Script =====
+COPY mahalanobis_pruning.py /workspace/mahalanobis_pruning.py
+RUN chmod +x /workspace/mahalanobis_pruning.py
+
+# ===== 11. Copy Pipeline Scripts (Most frequently changed) =====
+COPY docker/scripts /workspace/scripts
+RUN chmod +x /workspace/scripts/*.sh
+
+# ===== 12. Create Data Directories =====
+RUN mkdir -p /workspace/data/input \
+             /workspace/data/output \
+             /workspace/data/checkpoints
+
+# Default command
+CMD ["/bin/bash"]

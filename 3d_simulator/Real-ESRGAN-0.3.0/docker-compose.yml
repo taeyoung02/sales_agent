@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  realesrgan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: realesrgan
+    volumes:
+      # Mount input and output directories
+      - ./tesla_motion:/app/tesla_motion:ro
+      - ./tesla_motion_enhanced:/app/tesla_motion_enhanced
+      - ./weights:/app/weights
+      # Optionally mount additional input/output folders
+      - ./inputs:/app/inputs:ro
+      - ./results:/app/results
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Uncomment for GPU support (requires nvidia-docker)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    command: >
+      conda run --no-capture-output -n realesrgan
+      python inference_realesrgan.py
+      -i tesla_motion
+      -o tesla_motion_enhanced
+      -s 4
+      --fp32
+      --tile 400

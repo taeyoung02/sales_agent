@@ -1,0 +1,188 @@
+services:
+  # Real-ESRGAN Image Preprocessing Service (Phase 0)
+  realesrgan:
+    build:
+      context: ./Real-ESRGAN-0.3.0
+      dockerfile: Dockerfile
+    image: realesrgan-preprocessing:latest
+    container_name: realesrgan_preprocessor
+    
+    # NVIDIA GPU support (Docker Compose v2 format)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    # Environment variables
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - INPUT_DIR=/app/inputs
+      - OUTPUT_DIR=/app/outputs
+      - MODEL_NAME=RealESRGAN_x4plus
+      - OUTSCALE=2
+      - TILE=400
+    
+    # Volume mounts
+    volumes:
+      # Mount input images (raw images before COLMAP)
+      - ./data:/app/data
+      # Mount weights directory for model checkpoints
+      - ./Real-ESRGAN-0.3.0/weights:/app/weights
+    
+    # Working directory
+    working_dir: /app
+    
+    # Shared memory size
+    shm_size: '8gb'
+    
+    # Network
+    networks:
+      - pipeline_net
+
+  # Rembg Background Removal Service (Phase 2A - Recommended)
+  # Uses NVIDIA PyTorch 25.09 base (PyTorch 2.9, CUDA 13.0, Python 3.12)
+  # Same CUDA version as main pipeline for consistency
+  rembg:
+    build:
+      context: .
+      dockerfile: Dockerfile_rembg_cuda
+    image: rembg-cuda:latest
+    container_name: rembg_mask_generator
+    
+    # NVIDIA GPU support (Docker Compose v2 format)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    # Environment variables
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - INPUT_DIR=/app/inputs
+      - OUTPUT_DIR=/app/outputs
+      - MODEL=u2net
+      - OUTPUT_TYPE=mask
+      - ALPHA_MATTING=false
+    
+    # Volume mounts
+    volumes:
+      - ./data:/app/data
+    
+    # Working directory
+    working_dir: /app
+    
+    # Shared memory size
+    shm_size: '8gb'
+    
+    # Network
+    networks:
+      - pipeline_net
+
+  # Main 3D Reconstruction Pipeline Service (COLMAP, 3DGS, LangSplat, CF3)
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: 3d-reconstruction-pipeline:latest
+    container_name: 3d_recon_pipeline
+    
+    # NVIDIA GPU support (Docker Compose v2 format)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    # Environment variables (GPU visibility for docker compose run)
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - DATA_DIR=/workspace/data
+      - PROJECT_NAME=my_scene
+    
+    # Volume mounts
+    volumes:
+      # Mount your data directory (shared with SuGaR container)
+      - ./data:/workspace/data
+      # Mount checkpoints (optional - for SAM, custom models)
+      - ./checkpoints:/workspace/data/checkpoints
+      # Mount custom .pth files (optional)
+      - ./custom_models:/workspace/custom_models
+      # Mount scripts for easy updates
+      - ./docker/scripts:/workspace/scripts
+    
+    # Dependency - wait for realesrgan to be ready (optional)
+    depends_on:
+      - realesrgan
+    
+    # Keep container running for interactive use
+    stdin_open: true
+    tty: true
+    
+    # Working directory
+    working_dir: /workspace
+    
+    # Shared memory size (important for PyTorch DataLoader)
+    shm_size: '64gb'
+    
+    # Network
+    networks:
+      - pipeline_net
+
+  # SuGaR Mesh Generation Service (Python 3.10 for Open3D compatibility)
+  sugar:
+    build:
+      context: ./SuGaR-main
+      dockerfile: Dockerfile
+    image: sugar-meshing:latest
+    container_name: sugar_meshing
+    
+    # NVIDIA GPU support (Docker Compose v2 format)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    # Volume mounts (shares data with main pipeline)
+    volumes:
+      - ./data:/workspace/data
+    
+    # Environment variables (GPU visibility)
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - CUDA_LAUNCH_BLOCKING=0
+    
+    # Keep container running for interactive use
+    stdin_open: true
+    tty: true
+    
+    # Working directory
+    working_dir: /workspace
+    
+    # Shared memory size
+    shm_size: '64gb'
+    
+    # Network
+    networks:
+      - pipeline_net
+
+networks:
+  pipeline_net:
+    driver: bridge
+#             count: all
+#             capabilities: [gpu, compute, utility]
